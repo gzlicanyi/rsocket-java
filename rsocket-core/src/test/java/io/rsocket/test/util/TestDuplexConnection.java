@@ -17,6 +17,7 @@
 package io.rsocket.test.util;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
 import io.rsocket.DuplexConnection;
 import java.util.Collection;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -27,6 +28,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.DirectProcessor;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoProcessor;
 
@@ -40,18 +42,24 @@ public class TestDuplexConnection implements DuplexConnection {
 
   private final LinkedBlockingQueue<ByteBuf> sent;
   private final DirectProcessor<ByteBuf> sentPublisher;
+  private final FluxSink<ByteBuf> sendSink;
   private final DirectProcessor<ByteBuf> received;
+  private final FluxSink<ByteBuf> receivedSink;
   private final MonoProcessor<Void> onClose;
   private final ConcurrentLinkedQueue<Subscriber<ByteBuf>> sendSubscribers;
+  private final ByteBufAllocator allocator;
   private volatile double availability = 1;
   private volatile int initialSendRequestN = Integer.MAX_VALUE;
 
-  public TestDuplexConnection() {
-    sent = new LinkedBlockingQueue<>();
-    received = DirectProcessor.create();
-    sentPublisher = DirectProcessor.create();
-    sendSubscribers = new ConcurrentLinkedQueue<>();
-    onClose = MonoProcessor.create();
+  public TestDuplexConnection(ByteBufAllocator allocator) {
+    this.allocator = allocator;
+    this.sent = new LinkedBlockingQueue<>();
+    this.received = DirectProcessor.create();
+    this.receivedSink = received.sink();
+    this.sentPublisher = DirectProcessor.create();
+    this.sendSink = sentPublisher.sink();
+    this.sendSubscribers = new ConcurrentLinkedQueue<>();
+    this.onClose = MonoProcessor.create();
   }
 
   @Override
@@ -65,7 +73,7 @@ public class TestDuplexConnection implements DuplexConnection {
         .doOnNext(
             frame -> {
               sent.offer(frame);
-              sentPublisher.onNext(frame);
+              sendSink.next(frame);
             })
         .doOnError(throwable -> logger.error("Error in send stream on test connection.", throwable))
         .subscribe(subscriber);
@@ -76,6 +84,11 @@ public class TestDuplexConnection implements DuplexConnection {
   @Override
   public Flux<ByteBuf> receive() {
     return received;
+  }
+
+  @Override
+  public ByteBufAllocator alloc() {
+    return allocator;
   }
 
   @Override
@@ -116,7 +129,7 @@ public class TestDuplexConnection implements DuplexConnection {
 
   public void addToReceivedBuffer(ByteBuf... received) {
     for (ByteBuf frame : received) {
-      this.received.onNext(frame);
+      this.receivedSink.next(frame);
     }
   }
 

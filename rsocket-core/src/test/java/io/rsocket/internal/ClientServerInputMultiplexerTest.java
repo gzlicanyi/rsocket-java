@@ -21,9 +21,11 @@ import static org.junit.Assert.assertEquals;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.Unpooled;
+import io.rsocket.buffer.LeaksTrackingByteBufAllocator;
 import io.rsocket.frame.*;
-import io.rsocket.plugins.PluginRegistry;
+import io.rsocket.plugins.InitializingInterceptorRegistry;
 import io.rsocket.test.util.TestDuplexConnection;
+import io.rsocket.util.DefaultPayload;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Before;
 import org.junit.Test;
@@ -31,14 +33,17 @@ import org.junit.Test;
 public class ClientServerInputMultiplexerTest {
   private TestDuplexConnection source;
   private ClientServerInputMultiplexer clientMultiplexer;
-  private ByteBufAllocator allocator = ByteBufAllocator.DEFAULT;
+  private LeaksTrackingByteBufAllocator allocator =
+      LeaksTrackingByteBufAllocator.instrument(ByteBufAllocator.DEFAULT);
   private ClientServerInputMultiplexer serverMultiplexer;
 
   @Before
   public void setup() {
-    source = new TestDuplexConnection();
-    clientMultiplexer = new ClientServerInputMultiplexer(source, new PluginRegistry(), true);
-    serverMultiplexer = new ClientServerInputMultiplexer(source, new PluginRegistry(), false);
+    source = new TestDuplexConnection(allocator);
+    clientMultiplexer =
+        new ClientServerInputMultiplexer(source, new InitializingInterceptorRegistry(), true);
+    serverMultiplexer =
+        new ClientServerInputMultiplexer(source, new InitializingInterceptorRegistry(), false);
   }
 
   @Test
@@ -188,38 +193,37 @@ public class ClientServerInputMultiplexerTest {
   }
 
   private ByteBuf resumeFrame() {
-    return ResumeFrameFlyweight.encode(allocator, Unpooled.EMPTY_BUFFER, 0, 0);
+    return ResumeFrameCodec.encode(allocator, Unpooled.EMPTY_BUFFER, 0, 0);
   }
 
   private ByteBuf setupFrame() {
-    return SetupFrameFlyweight.encode(
+    return SetupFrameCodec.encode(
         ByteBufAllocator.DEFAULT,
         false,
         0,
         42,
         "application/octet-stream",
         "application/octet-stream",
-        Unpooled.EMPTY_BUFFER,
-        Unpooled.EMPTY_BUFFER);
+        DefaultPayload.create(Unpooled.EMPTY_BUFFER, Unpooled.EMPTY_BUFFER));
   }
 
   private ByteBuf leaseFrame() {
-    return LeaseFrameFlyweight.encode(allocator, 1_000, 1, Unpooled.EMPTY_BUFFER);
+    return LeaseFrameCodec.encode(allocator, 1_000, 1, Unpooled.EMPTY_BUFFER);
   }
 
   private ByteBuf errorFrame(int i) {
-    return ErrorFrameFlyweight.encode(allocator, i, new Exception());
+    return ErrorFrameCodec.encode(allocator, i, new Exception());
   }
 
   private ByteBuf resumeOkFrame() {
-    return ResumeOkFrameFlyweight.encode(allocator, 0);
+    return ResumeOkFrameCodec.encode(allocator, 0);
   }
 
   private ByteBuf keepAliveFrame() {
-    return KeepAliveFrameFlyweight.encode(allocator, false, 0, Unpooled.EMPTY_BUFFER);
+    return KeepAliveFrameCodec.encode(allocator, false, 0, Unpooled.EMPTY_BUFFER);
   }
 
   private ByteBuf metadataPushFrame() {
-    return MetadataPushFrameFlyweight.encode(allocator, Unpooled.EMPTY_BUFFER);
+    return MetadataPushFrameCodec.encode(allocator, Unpooled.EMPTY_BUFFER);
   }
 }

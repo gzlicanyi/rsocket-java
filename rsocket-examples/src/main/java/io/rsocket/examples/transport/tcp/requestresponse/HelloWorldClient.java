@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 the original author or authors.
+ * Copyright 2015-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,65 +16,54 @@
 
 package io.rsocket.examples.transport.tcp.requestresponse;
 
-import io.rsocket.AbstractRSocket;
 import io.rsocket.Payload;
 import io.rsocket.RSocket;
-import io.rsocket.RSocketFactory;
+import io.rsocket.SocketAcceptor;
+import io.rsocket.core.RSocketConnector;
+import io.rsocket.core.RSocketServer;
 import io.rsocket.transport.netty.client.TcpClientTransport;
 import io.rsocket.transport.netty.server.TcpServerTransport;
 import io.rsocket.util.DefaultPayload;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 
 public final class HelloWorldClient {
 
-  public static void main(String[] args) {
-    RSocketFactory.receive()
-        .acceptor(
-            (setupPayload, reactiveSocket) ->
-                Mono.just(
-                    new AbstractRSocket() {
-                      boolean fail = true;
+  private static final Logger logger = LoggerFactory.getLogger(HelloWorldClient.class);
 
-                      @Override
-                      public Mono<Payload> requestResponse(Payload p) {
-                        if (fail) {
-                          fail = false;
-                          return Mono.error(new Throwable());
-                        } else {
-                          return Mono.just(p);
-                        }
-                      }
-                    }))
-        .transport(TcpServerTransport.create("localhost", 7000))
-        .start()
+  public static void main(String[] args) {
+
+    RSocket rsocket =
+        new RSocket() {
+          boolean fail = true;
+
+          @Override
+          public Mono<Payload> requestResponse(Payload p) {
+            if (fail) {
+              fail = false;
+              return Mono.error(new Throwable("Simulated error"));
+            } else {
+              return Mono.just(p);
+            }
+          }
+        };
+
+    RSocketServer.create(SocketAcceptor.with(rsocket))
+        .bind(TcpServerTransport.create("localhost", 7000))
         .subscribe();
 
     RSocket socket =
-        RSocketFactory.connect()
-            .transport(TcpClientTransport.create("localhost", 7000))
-            .start()
-            .block();
+        RSocketConnector.connectWith(TcpClientTransport.create("localhost", 7000)).block();
 
-    socket
-        .requestResponse(DefaultPayload.create("Hello"))
-        .map(Payload::getDataUtf8)
-        .onErrorReturn("error")
-        .doOnNext(System.out::println)
-        .block();
-
-    socket
-        .requestResponse(DefaultPayload.create("Hello"))
-        .map(Payload::getDataUtf8)
-        .onErrorReturn("error")
-        .doOnNext(System.out::println)
-        .block();
-
-    socket
-        .requestResponse(DefaultPayload.create("Hello"))
-        .map(Payload::getDataUtf8)
-        .onErrorReturn("error")
-        .doOnNext(System.out::println)
-        .block();
+    for (int i = 0; i < 3; i++) {
+      socket
+          .requestResponse(DefaultPayload.create("Hello"))
+          .map(Payload::getDataUtf8)
+          .onErrorReturn("error")
+          .doOnNext(logger::debug)
+          .block();
+    }
 
     socket.dispose();
   }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 the original author or authors.
+ * Copyright 2015-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,12 +23,13 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 
-import io.rsocket.AbstractRSocket;
 import io.rsocket.Payload;
 import io.rsocket.RSocket;
-import io.rsocket.RSocketFactory;
+import io.rsocket.core.RSocketConnector;
+import io.rsocket.core.RSocketServer;
 import io.rsocket.plugins.DuplexConnectionInterceptor;
 import io.rsocket.plugins.RSocketInterceptor;
+import io.rsocket.plugins.SocketAcceptorInterceptor;
 import io.rsocket.test.TestSubscriber;
 import io.rsocket.transport.netty.client.TcpClientTransport;
 import io.rsocket.transport.netty.server.CloseableChannel;
@@ -38,7 +39,6 @@ import io.rsocket.util.RSocketProxy;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.After;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.reactivestreams.Publisher;
@@ -48,35 +48,54 @@ import reactor.core.publisher.Mono;
 
 public class IntegrationTest {
 
-  private static final RSocketInterceptor clientPlugin;
-  private static final RSocketInterceptor serverPlugin;
-  private static final DuplexConnectionInterceptor connectionPlugin;
-  public static volatile boolean calledClient = false;
-  public static volatile boolean calledServer = false;
-  public static volatile boolean calledFrame = false;
+  private static final RSocketInterceptor requesterInterceptor;
+  private static final RSocketInterceptor responderInterceptor;
+  private static final SocketAcceptorInterceptor clientAcceptorInterceptor;
+  private static final SocketAcceptorInterceptor serverAcceptorInterceptor;
+  private static final DuplexConnectionInterceptor connectionInterceptor;
+
+  private static volatile boolean calledRequester = false;
+  private static volatile boolean calledResponder = false;
+  private static volatile boolean calledClientAcceptor = false;
+  private static volatile boolean calledServerAcceptor = false;
+  private static volatile boolean calledFrame = false;
 
   static {
-    clientPlugin =
+    requesterInterceptor =
         reactiveSocket ->
             new RSocketProxy(reactiveSocket) {
               @Override
               public Mono<Payload> requestResponse(Payload payload) {
-                calledClient = true;
+                calledRequester = true;
                 return reactiveSocket.requestResponse(payload);
               }
             };
 
-    serverPlugin =
+    responderInterceptor =
         reactiveSocket ->
             new RSocketProxy(reactiveSocket) {
               @Override
               public Mono<Payload> requestResponse(Payload payload) {
-                calledServer = true;
+                calledResponder = true;
                 return reactiveSocket.requestResponse(payload);
               }
             };
 
-    connectionPlugin =
+    clientAcceptorInterceptor =
+        acceptor ->
+            (setup, sendingSocket) -> {
+              calledClientAcceptor = true;
+              return acceptor.accept(setup, sendingSocket);
+            };
+
+    serverAcceptorInterceptor =
+        acceptor ->
+            (setup, sendingSocket) -> {
+              calledServerAcceptor = true;
+              return acceptor.accept(setup, sendingSocket);
+            };
+
+    connectionInterceptor =
         (type, connection) -> {
           calledFrame = true;
           return connection;
@@ -95,17 +114,8 @@ public class IntegrationTest {
     requestCount = new AtomicInteger();
     disconnectionCounter = new CountDownLatch(1);
 
-    TcpServerTransport serverTransport = TcpServerTransport.create(0);
-
     server =
-        RSocketFactory.receive()
-            .addServerPlugin(serverPlugin)
-            .addConnectionPlugin(connectionPlugin)
-            .errorConsumer(
-                t -> {
-                  errorCount.incrementAndGet();
-                })
-            .acceptor(
+        RSocketServer.create(
                 (setup, sendingSocket) -> {
                   sendingSocket
                       .onClose()
@@ -113,7 +123,7 @@ public class IntegrationTest {
                       .subscribe();
 
                   return Mono.just(
-                      new AbstractRSocket() {
+                      new RSocket() {
                         @Override
                         public Mono<Payload> requestResponse(Payload payload) {
                           return Mono.just(DefaultPayload.create("RESPONSE", "METADATA"))
@@ -132,16 +142,24 @@ public class IntegrationTest {
                         }
                       });
                 })
-            .transport(serverTransport)
-            .start()
+            .interceptors(
+                registry ->
+                    registry
+                        .forResponder(responderInterceptor)
+                        .forSocketAcceptor(serverAcceptorInterceptor)
+                        .forConnection(connectionInterceptor))
+            .bind(TcpServerTransport.create("localhost", 0))
             .block();
 
     client =
-        RSocketFactory.connect()
-            .addClientPlugin(clientPlugin)
-            .addConnectionPlugin(connectionPlugin)
-            .transport(TcpClientTransport.create(server.address()))
-            .start()
+        RSocketConnector.create()
+            .interceptors(
+                registry ->
+                    registry
+                        .forRequester(requesterInterceptor)
+                        .forSocketAcceptor(clientAcceptorInterceptor)
+                        .forConnection(connectionInterceptor))
+            .connect(TcpClientTransport.create(server.address()))
             .block();
   }
 
@@ -154,8 +172,10 @@ public class IntegrationTest {
   public void testRequest() {
     client.requestResponse(DefaultPayload.create("REQUEST", "META")).block();
     assertThat("Server did not see the request.", requestCount.get(), is(1));
-    assertTrue(calledClient);
-    assertTrue(calledServer);
+    assertTrue(calledRequester);
+    assertTrue(calledResponder);
+    assertTrue(calledClientAcceptor);
+    assertTrue(calledServerAcceptor);
     assertTrue(calledFrame);
   }
 
@@ -180,8 +200,6 @@ public class IntegrationTest {
       client.requestChannel(Mono.error(new Throwable())).blockLast();
     } catch (Throwable t) {
     }
-
-    Assert.assertEquals(1, errorCount.incrementAndGet());
 
     testRequest();
   }

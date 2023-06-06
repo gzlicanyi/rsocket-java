@@ -19,10 +19,10 @@ package io.rsocket.integration;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 
-import io.rsocket.AbstractRSocket;
 import io.rsocket.Payload;
 import io.rsocket.RSocket;
-import io.rsocket.RSocketFactory;
+import io.rsocket.core.RSocketConnector;
+import io.rsocket.core.RSocketServer;
 import io.rsocket.transport.netty.client.TcpClientTransport;
 import io.rsocket.transport.netty.server.CloseableChannel;
 import io.rsocket.transport.netty.server.TcpServerTransport;
@@ -40,26 +40,20 @@ import reactor.core.publisher.UnicastProcessor;
 import reactor.core.scheduler.Schedulers;
 
 public class TcpIntegrationTest {
-  private AbstractRSocket handler;
+  private RSocket handler;
 
   private CloseableChannel server;
 
   @Before
   public void startup() {
-    TcpServerTransport serverTransport = TcpServerTransport.create(0);
     server =
-        RSocketFactory.receive()
-            .acceptor((setup, sendingSocket) -> Mono.just(new RSocketProxy(handler)))
-            .transport(serverTransport)
-            .start()
+        RSocketServer.create((setup, sendingSocket) -> Mono.just(new RSocketProxy(handler)))
+            .bind(TcpServerTransport.create("localhost", 0))
             .block();
   }
 
   private RSocket buildClient() {
-    return RSocketFactory.connect()
-        .transport(TcpClientTransport.create(server.address()))
-        .start()
-        .block();
+    return RSocketConnector.connectWith(TcpClientTransport.create(server.address())).block();
   }
 
   @After
@@ -70,7 +64,7 @@ public class TcpIntegrationTest {
   @Test(timeout = 15_000L)
   public void testCompleteWithoutNext() {
     handler =
-        new AbstractRSocket() {
+        new RSocket() {
           @Override
           public Flux<Payload> requestStream(Payload payload) {
             return Flux.empty();
@@ -86,7 +80,7 @@ public class TcpIntegrationTest {
   @Test(timeout = 15_000L)
   public void testSingleStream() {
     handler =
-        new AbstractRSocket() {
+        new RSocket() {
           @Override
           public Flux<Payload> requestStream(Payload payload) {
             return Flux.just(DefaultPayload.create("RESPONSE", "METADATA"));
@@ -103,7 +97,7 @@ public class TcpIntegrationTest {
   @Test(timeout = 15_000L)
   public void testZeroPayload() {
     handler =
-        new AbstractRSocket() {
+        new RSocket() {
           @Override
           public Flux<Payload> requestStream(Payload payload) {
             return Flux.just(EmptyPayload.INSTANCE);
@@ -120,7 +114,7 @@ public class TcpIntegrationTest {
   @Test(timeout = 15_000L)
   public void testRequestResponseErrors() {
     handler =
-        new AbstractRSocket() {
+        new RSocket() {
           boolean first = true;
 
           @Override
@@ -160,7 +154,7 @@ public class TcpIntegrationTest {
     map.put("REQUEST2", processor2);
 
     handler =
-        new AbstractRSocket() {
+        new RSocket() {
           @Override
           public Flux<Payload> requestStream(Payload payload) {
             return map.get(payload.getDataUtf8());

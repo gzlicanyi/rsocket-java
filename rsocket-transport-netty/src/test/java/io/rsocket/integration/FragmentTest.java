@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 the original author or authors.
+ * Copyright 2015-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,32 +18,36 @@ package io.rsocket.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import io.rsocket.AbstractRSocket;
 import io.rsocket.Payload;
 import io.rsocket.RSocket;
-import io.rsocket.RSocketFactory;
+import io.rsocket.core.RSocketConnector;
+import io.rsocket.core.RSocketServer;
 import io.rsocket.transport.netty.client.TcpClientTransport;
 import io.rsocket.transport.netty.server.CloseableChannel;
 import io.rsocket.transport.netty.server.TcpServerTransport;
 import io.rsocket.util.DefaultPayload;
 import io.rsocket.util.RSocketProxy;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 public class FragmentTest {
-  private static final int frameSize = 64;
-  private AbstractRSocket handler;
+  private RSocket handler;
   private CloseableChannel server;
   private String message = null;
   private String metaData = null;
   private String responseMessage = null;
 
-  @BeforeEach
-  public void startup() {
+  private static Stream<Arguments> cases() {
+    return Stream.of(Arguments.of(0, 64), Arguments.of(64, 0), Arguments.of(64, 64));
+  }
+
+  public void startup(int frameSize) {
     int randomPort = ThreadLocalRandom.current().nextInt(10_000, 20_000);
     StringBuilder message = new StringBuilder();
     StringBuilder responseMessage = new StringBuilder();
@@ -57,21 +61,18 @@ public class FragmentTest {
     this.responseMessage = responseMessage.toString();
     this.metaData = metaData.toString();
 
-    TcpServerTransport serverTransport = TcpServerTransport.create(randomPort);
+    TcpServerTransport serverTransport = TcpServerTransport.create("localhost", randomPort);
     server =
-        RSocketFactory.receive()
+        RSocketServer.create((setup, sendingSocket) -> Mono.just(new RSocketProxy(handler)))
             .fragment(frameSize)
-            .acceptor((setup, sendingSocket) -> Mono.just(new RSocketProxy(handler)))
-            .transport(serverTransport)
-            .start()
+            .bind(serverTransport)
             .block();
   }
 
-  private RSocket buildClient() {
-    return RSocketFactory.connect()
+  private RSocket buildClient(int frameSize) {
+    return RSocketConnector.create()
         .fragment(frameSize)
-        .transport(TcpClientTransport.create(server.address()))
-        .start()
+        .connect(TcpClientTransport.create(server.address()))
         .block();
   }
 
@@ -80,12 +81,14 @@ public class FragmentTest {
     server.dispose();
   }
 
-  @Test
-  void testFragmentNoMetaData() {
+  @ParameterizedTest
+  @MethodSource("cases")
+  void testFragmentNoMetaData(int clientFrameSize, int serverFrameSize) {
+    startup(serverFrameSize);
     System.out.println(
         "-------------------------------------------------testFragmentNoMetaData-------------------------------------------------");
     handler =
-        new AbstractRSocket() {
+        new RSocket() {
           @Override
           public Flux<Payload> requestStream(Payload payload) {
             String request = payload.getDataUtf8();
@@ -97,7 +100,7 @@ public class FragmentTest {
           }
         };
 
-    RSocket client = buildClient();
+    RSocket client = buildClient(clientFrameSize);
 
     System.out.println("original message:  " + message);
     System.out.println("original metadata: " + metaData);
@@ -108,12 +111,14 @@ public class FragmentTest {
     assertThat(responseMessage).isEqualTo(payload.getDataUtf8());
   }
 
-  @Test
-  void testFragmentRequestMetaDataOnly() {
+  @ParameterizedTest
+  @MethodSource("cases")
+  void testFragmentRequestMetaDataOnly(int clientFrameSize, int serverFrameSize) {
+    startup(serverFrameSize);
     System.out.println(
         "-------------------------------------------------testFragmentRequestMetaDataOnly-------------------------------------------------");
     handler =
-        new AbstractRSocket() {
+        new RSocket() {
           @Override
           public Flux<Payload> requestStream(Payload payload) {
             String request = payload.getDataUtf8();
@@ -125,7 +130,7 @@ public class FragmentTest {
           }
         };
 
-    RSocket client = buildClient();
+    RSocket client = buildClient(clientFrameSize);
 
     System.out.println("original message:  " + message);
     System.out.println("original metadata: " + metaData);
@@ -136,13 +141,15 @@ public class FragmentTest {
     assertThat(responseMessage).isEqualTo(payload.getDataUtf8());
   }
 
-  @Test
-  void testFragmentBothMetaData() {
+  @ParameterizedTest
+  @MethodSource("cases")
+  void testFragmentBothMetaData(int clientFrameSize, int serverFrameSize) {
+    startup(serverFrameSize);
     Payload responsePayload = DefaultPayload.create(responseMessage);
     System.out.println(
         "-------------------------------------------------testFragmentBothMetaData-------------------------------------------------");
     handler =
-        new AbstractRSocket() {
+        new RSocket() {
           @Override
           public Flux<Payload> requestStream(Payload payload) {
             String request = payload.getDataUtf8();
@@ -164,7 +171,7 @@ public class FragmentTest {
           }
         };
 
-    RSocket client = buildClient();
+    RSocket client = buildClient(clientFrameSize);
 
     System.out.println("original message:  " + message);
     System.out.println("original metadata: " + metaData);

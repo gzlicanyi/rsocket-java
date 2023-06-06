@@ -19,7 +19,7 @@ package io.rsocket.transport.netty;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.rsocket.DuplexConnection;
-import io.rsocket.frame.FrameLengthFlyweight;
+import io.rsocket.frame.FrameLengthCodec;
 import io.rsocket.internal.BaseDuplexConnection;
 import java.util.Objects;
 import org.reactivestreams.Publisher;
@@ -31,7 +31,6 @@ import reactor.netty.Connection;
 public final class TcpDuplexConnection extends BaseDuplexConnection {
 
   private final Connection connection;
-  private final ByteBufAllocator allocator = ByteBufAllocator.DEFAULT;
   private final boolean encodeLength;
 
   /**
@@ -63,6 +62,11 @@ public final class TcpDuplexConnection extends BaseDuplexConnection {
   }
 
   @Override
+  public ByteBufAllocator alloc() {
+    return connection.channel().alloc();
+  }
+
+  @Override
   protected void doOnClose() {
     if (!connection.isDisposed()) {
       connection.dispose();
@@ -84,7 +88,7 @@ public final class TcpDuplexConnection extends BaseDuplexConnection {
 
   private ByteBuf encode(ByteBuf frame) {
     if (encodeLength) {
-      return FrameLengthFlyweight.encode(allocator, frame.readableBytes(), frame);
+      return FrameLengthCodec.encode(alloc(), frame.readableBytes(), frame);
     } else {
       return frame;
     }
@@ -92,7 +96,7 @@ public final class TcpDuplexConnection extends BaseDuplexConnection {
 
   private ByteBuf decode(ByteBuf frame) {
     if (encodeLength) {
-      return FrameLengthFlyweight.frame(frame).retain();
+      return FrameLengthCodec.frame(frame).retain();
     } else {
       return frame;
     }

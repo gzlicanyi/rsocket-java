@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018 the original author or authors.
+ * Copyright 2015-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,13 +15,11 @@
  */
 
 plugins {
-    id 'com.gradle.build-scan' version '1.16'
-
-    id 'com.github.sherter.google-java-format' version '0.7.1' apply false
-    id 'com.jfrog.artifactory' version '4.7.3' apply false
+    id 'com.github.sherter.google-java-format' version '0.8' apply false
+    id 'com.jfrog.artifactory' version '4.11.0' apply false
     id 'com.jfrog.bintray' version '1.8.4' apply false
-    id 'me.champeau.gradle.jmh' version '0.4.8' apply false
-    id 'io.spring.dependency-management' version '1.0.7.RELEASE' apply false
+    id 'me.champeau.gradle.jmh' version '0.5.0' apply false
+    id 'io.spring.dependency-management' version '1.0.8.RELEASE' apply false
     id 'io.morethan.jmhreport' version '0.9.0' apply false
 }
 
@@ -29,70 +27,76 @@ subprojects {
     apply plugin: 'io.spring.dependency-management'
     apply plugin: 'com.github.sherter.google-java-format'
 
-    ext['reactor-bom.version'] = 'Californium-SR8'
+    ext['reactor-bom.version'] = 'Dysprosium-SR7'
     ext['logback.version'] = '1.2.3'
     ext['findbugs.version'] = '3.0.2'
-    ext['netty.version'] = '4.1.36.Final'
-    ext['netty-boringssl.version'] = '2.0.25.Final'
+    ext['netty-bom.version'] = '4.1.48.Final'
+    ext['netty-boringssl.version'] = '2.0.30.Final'
     ext['hdrhistogram.version'] = '2.1.10'
-    ext['mockito.version'] = '2.25.1'
+    ext['mockito.version'] = '3.2.0'
     ext['slf4j.version'] = '1.7.25'
     ext['jmh.version'] = '1.21'
-    ext['junit.version'] = '5.1.0'
+    ext['junit.version'] = '5.5.2'
     ext['hamcrest.version'] = '1.3'
     ext['micrometer.version'] = '1.0.6'
     ext['assertj.version'] = '3.11.1'
 
+    group = "io.rsocket"
+
     googleJavaFormat {
         toolVersion = '1.6'
     }
-    
+
+    ext {
+        if (project.hasProperty('versionSuffix')) {
+            project.version += project.getProperty('versionSuffix')
+        }
+    }
+
     dependencyManagement {
         imports {
             mavenBom "io.projectreactor:reactor-bom:${ext['reactor-bom.version']}"
+            mavenBom "io.netty:netty-bom:${ext['netty-bom.version']}"
+            mavenBom "org.junit:junit-bom:${ext['junit.version']}"
         }
 
         dependencies {
             dependency "ch.qos.logback:logback-classic:${ext['logback.version']}"
-            dependency "com.google.code.findbugs:jsr305:${ext['findbugs.version']}"
-            dependency "io.netty:netty-buffer:${ext['netty.version']}"
             dependency "io.netty:netty-tcnative-boringssl-static:${ext['netty-boringssl.version']}"
             dependency "io.micrometer:micrometer-core:${ext['micrometer.version']}"
             dependency "org.assertj:assertj-core:${ext['assertj.version']}"
             dependency "org.hdrhistogram:HdrHistogram:${ext['hdrhistogram.version']}"
             dependency "org.slf4j:slf4j-api:${ext['slf4j.version']}"
-            
             dependencySet(group: 'org.mockito', version: ext['mockito.version']) {
                 entry 'mockito-junit-jupiter'
                 entry 'mockito-core'
             }
-
-            dependencySet(group: 'org.junit.jupiter', version: ext['junit.version']) {
-                entry 'junit-jupiter-api'
-                entry 'junit-jupiter-engine'
-                entry 'junit-jupiter-params'
-            }
-
             // TODO: Remove after JUnit5 migration
             dependency 'junit:junit:4.12'
             dependency "org.hamcrest:hamcrest-library:${ext['hamcrest.version']}"
-            dependencySet(group: 'org.junit.vintage', version: ext['junit.version']) {
-                entry 'junit-vintage-engine'
-            }
-
             dependencySet(group: 'org.openjdk.jmh', version: ext['jmh.version']) {
                 entry 'jmh-core'
                 entry 'jmh-generator-annprocess'
             }
+        }
+        generatedPomCustomization {
+            enabled = false
         }
     }
 
     repositories {
         mavenCentral()
 
-        if (version.endsWith('BUILD-SNAPSHOT') || project.hasProperty('platformVersion')) {
+        if (version.endsWith('SNAPSHOT') || project.hasProperty('platformVersion')) {
             maven { url 'http://repo.spring.io/libs-snapshot' }
+            maven {
+                url 'https://oss.jfrog.org/artifactory/oss-snapshot-local'
+            }
         }
+    }
+
+    tasks.withType(GenerateModuleMetadata) {
+        enabled = false
     }
 
     plugins.withType(JavaPlugin) {
@@ -104,11 +108,20 @@ subprojects {
         }
 
         javadoc {
+            def jdk = JavaVersion.current().majorVersion
+            def jdkJavadoc = "https://docs.oracle.com/javase/$jdk/docs/api/"
+            if (JavaVersion.current().isJava11Compatible()) {
+                jdkJavadoc = "https://docs.oracle.com/en/java/javase/$jdk/docs/api/"
+            }
             options.with {
-                links 'https://docs.oracle.com/javase/8/docs/api/'
+                links jdkJavadoc
                 links 'https://projectreactor.io/docs/core/release/api/'
                 links 'https://netty.io/4.1/api/'
             }
+        }
+
+        tasks.named("javadoc").configure {
+            onlyIf { System.getenv('SKIP_RELEASE') != "true" }
         }
 
         test {
@@ -116,9 +129,40 @@ subprojects {
 
             systemProperty "io.netty.leakDetection.level", "ADVANCED"
         }
-        
-        tasks.named("javadoc").configure {
-            onlyIf { System.getenv('SKIP_RELEASE') != "true" }
+
+        //all test tasks will show FAILED for each test method,
+        // common exclusions, no scanning
+        project.tasks.withType(Test).all {
+            testLogging {
+                events "FAILED"
+                showExceptions true
+                exceptionFormat "FULL"
+                stackTraceFilters "ENTRY_POINT"
+                maxGranularity 3
+            }
+
+            if (JavaVersion.current().isJava9Compatible()) {
+                println "Java 9+: lowering MaxGCPauseMillis to 20ms in ${project.name} ${name}"
+                jvmArgs = ["-XX:MaxGCPauseMillis=20"]
+            }
+
+            systemProperty("java.awt.headless", "true")
+            systemProperty("reactor.trace.cancel", "true")
+            systemProperty("reactor.trace.nocapacity", "true")
+            systemProperty("testGroups", project.properties.get("testGroups"))
+            scanForTestClasses = false
+            exclude '**/*Abstract*.*'
+
+            //allow re-run of failed tests only without special test tasks failing
+            // because the filter is too restrictive
+            filter.setFailOnNoMatchingTests(false)
+
+            //display intermediate results for special test tasks
+            afterSuite { desc, result ->
+                if (!desc.parent) { // will match the outermost suite
+                    println('\n' + "${desc} Results: ${result.resultType} (${result.testCount} tests, ${result.successfulTestCount} successes, ${result.failedTestCount} failures, ${result.skippedTestCount} skipped)")
+                }
+            }
         }
     }
 
@@ -132,58 +176,14 @@ subprojects {
             classifier 'javadoc'
             from javadoc.destinationDir
         }
-    }
 
-    plugins.withType(MavenPublishPlugin) {
-        publishing {
-            publications {
-                maven(MavenPublication) {
-                    groupId 'io.rsocket'
-
-                    from components.java
-
-                    artifact sourcesJar
-                    artifact javadocJar
-
-                    pom.withXml {
-                        asNode().':version' + {
-                            resolveStrategy = DELEGATE_FIRST
-
-                            name project.name
-                            description project.description
-                            url 'http://rsocket.io'
-
-                            licenses {
-                                license {
-                                    name 'The Apache Software License, Version 2.0'
-                                    url 'http://www.apache.org/license/LICENSE-2.0.txt'
-                                }
-                            }
-
-                            developers {
-                                developer {
-                                    id 'robertroeser'
-                                    name 'Robert Roeser'
-                                    email 'robert@netifi.com'
-                                }
-                                developer {
-                                    id 'rdegnan'
-                                    name 'Ryland Degnan'
-                                    email 'ryland@netifi.com'
-                                }
-                                developer {
-                                    id 'yschimke'
-                                    name 'Yuri Schimke'
-                                    email 'yuri@schimke.ee'
-                                }
-                            }
-
-                            scm {
-                                connection 'scm:git:https://github.com/rsocket/rsocket-java.git'
-                                developerConnection 'scm:git:https://github.com/rsocket/rsocket-java.git'
-                                url 'https://github.com/rsocket/rsocket-java'
-                            }
-                        }
+        plugins.withType(MavenPublishPlugin) {
+            publishing {
+                publications {
+                    maven(MavenPublication) {
+                        from components.java
+                        artifact sourcesJar
+                        artifact javadocJar
                     }
                 }
             }
@@ -191,8 +191,7 @@ subprojects {
     }
 }
 
-apply from: 'artifactory.gradle'
-apply from: 'bintray.gradle'
+apply from: "${rootDir}/gradle/publications.gradle"
 
 buildScan {
     termsOfServiceUrl = 'https://gradle.com/terms-of-service'

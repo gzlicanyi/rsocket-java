@@ -16,13 +16,13 @@
 
 package io.rsocket.transport.netty.client;
 
-import static io.rsocket.frame.FrameLengthFlyweight.FRAME_LENGTH_MASK;
+import static io.rsocket.frame.FrameLengthCodec.FRAME_LENGTH_MASK;
 import static io.rsocket.transport.netty.UriUtils.getPort;
 import static io.rsocket.transport.netty.UriUtils.isSecure;
 
-import io.netty.buffer.ByteBufAllocator;
 import io.rsocket.DuplexConnection;
 import io.rsocket.fragmentation.FragmentationDuplexConnection;
+import io.rsocket.fragmentation.ReassemblyDuplexConnection;
 import io.rsocket.transport.ClientTransport;
 import io.rsocket.transport.ServerTransport;
 import io.rsocket.transport.TransportHeaderAware;
@@ -35,6 +35,7 @@ import java.util.Objects;
 import java.util.function.Supplier;
 import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
+import reactor.netty.http.client.WebsocketClientSpec;
 import reactor.netty.tcp.TcpClient;
 
 /**
@@ -43,12 +44,11 @@ import reactor.netty.tcp.TcpClient;
  */
 public final class WebsocketClientTransport implements ClientTransport, TransportHeaderAware {
 
-  private static final int DEFAULT_FRAME_SIZE = 65536;
   private static final String DEFAULT_PATH = "/";
 
   private final HttpClient client;
 
-  private String path;
+  private final String path;
 
   private Supplier<Map<String, String>> transportHeaders = Collections::emptyMap;
 
@@ -93,7 +93,7 @@ public final class WebsocketClientTransport implements ClientTransport, Transpor
   public static WebsocketClientTransport create(InetSocketAddress address) {
     Objects.requireNonNull(address, "address must not be null");
 
-    TcpClient client = TcpClient.create().addressSupplier(() -> address);
+    TcpClient client = TcpClient.create().remoteAddress(() -> address);
     return create(client);
   }
 
@@ -156,7 +156,8 @@ public final class WebsocketClientTransport implements ClientTransport, Transpor
         ? isError
         : client
             .headers(headers -> transportHeaders.get().forEach(headers::set))
-            .websocket(FRAME_LENGTH_MASK)
+            .websocket(
+                WebsocketClientSpec.builder().maxFramePayloadLength(FRAME_LENGTH_MASK).build())
             .uri(path)
             .connect()
             .map(
@@ -164,8 +165,9 @@ public final class WebsocketClientTransport implements ClientTransport, Transpor
                   DuplexConnection connection = new WebsocketDuplexConnection(c);
                   if (mtu > 0) {
                     connection =
-                        new FragmentationDuplexConnection(
-                            connection, ByteBufAllocator.DEFAULT, mtu, false, "client");
+                        new FragmentationDuplexConnection(connection, mtu, false, "client");
+                  } else {
+                    connection = new ReassemblyDuplexConnection(connection, false);
                   }
                   return connection;
                 });
